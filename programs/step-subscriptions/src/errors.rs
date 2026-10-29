@@ -50,4 +50,16 @@ pub enum ErrorCode {
     DowngradesNotSupported,
     #[msg("Invalid str20a5 count")]
     InvalidStr20A5Count,
+    #[msg("Upgrade credits must use the same payment mint")]
+    InvalidPaymentMint,
+    #[msg("Payment mint cannot change after a purchase")]
+    ProductMintLocked,
+    #[msg("Legacy permanent purchase requires an explicit ownership migration")]
+    PurchaseMigrationRequired,
+    #[msg("Arithmetic overflow or inconsistent accounting")]
+    ArithmeticOverflow,
+    #[msg("Invalid discount basis points or quantity threshold")]
+    InvalidDiscount,
+    #[msg("Upgrade accounts must be writable purchase pairs")]
+    InvalidUpgradeAccounts,
 }

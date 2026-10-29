@@ -1,6 +1,5 @@
 use super::errors::ErrorCode;
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::sysvar::{self};
 
 pub const PRODUCT_NAME_LENGTH_MAX: usize = 32;
 pub const PRODUCT_NAME_LENGTH_MIN: usize = 4;
@@ -70,25 +69,115 @@ impl Purchase {
         }
     }
 
-    pub fn total_active(&self, purchase_duration_secs: Option<i64>) -> u8 {
-        let mut total = 0;
-        let current_time = sysvar::clock::Clock::get().unwrap().unix_timestamp;
-        let mut current_end_date = self.expires_ts;
-        // find non expired purchases
-        'outer: for history in self.history_10.iter().rev() {
-            if let Some(purchase_duration_secs) = purchase_duration_secs {
-                for _ in 0..history.quantity {
-                    current_end_date -= purchase_duration_secs;
-                    if current_end_date < current_time {
-                        break 'outer; // expired
-                    }
-                    total += 1;
-                }
-            } else {
-                total += history.quantity;
+    // Version 1 uses reserved[0] as a tag and [1..9] as a LE u64 counter.
+    // It survives bounded-history eviction without changing the account layout.
+    pub fn add_permanent_quantity(&mut self, quantity: u8, max_owned: u8) -> Result<()> {
+        require_gt!(quantity, 0, ErrorCode::InvalidPurchaseQty);
+        let owned = match self.reserved[0] {
+            1 => u64::from_le_bytes(self.reserved[1..9].try_into().unwrap()),
+            0 if self.history_10.len() < 10 => self
+                .history_10
+                .iter()
+                .map(|entry| u64::from(entry.quantity))
+                .sum(),
+            // Ten entries may already have lost older receipts. Never guess.
+            _ => return err!(ErrorCode::PurchaseMigrationRequired),
+        };
+        let next = owned
+            .checked_add(u64::from(quantity))
+            .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
+        require_gte!(u64::from(max_owned), next, ErrorCode::MaxPurchaseQtyReached);
+        self.reserved[0] = 1;
+        self.reserved[1..9].copy_from_slice(&next.to_le_bytes());
+        Ok(())
+    }
+
+    pub fn history_totals(&self) -> Result<(u64, u64)> {
+        self.history_10
+            .iter()
+            .try_fold((0_u64, 0_u64), |(revenue, quantity), entry| {
+                Ok((
+                    revenue
+                        .checked_add(entry.amount_paid)
+                        .ok_or(error!(ErrorCode::ArithmeticOverflow))?,
+                    quantity + u64::from(entry.quantity),
+                ))
+            })
+    }
+
+    // Each target can apply a cumulative pool of permanent cash payments only
+    // once. Later claims must include the cumulative source pool, as tier
+    // upgrades already do. [9] is its version; [10..18] is the credited u64.
+    pub fn permanent_upgrade_credit(&mut self, pool: u64) -> Result<u64> {
+        if self.reserved[9] == 0 {
+            if !self.history_10.is_empty() {
+                require_eq!(pool, 0, ErrorCode::PurchaseMigrationRequired);
+                return Ok(0);
             }
+            self.reserved[9] = 1;
         }
-        total
+        require_eq!(self.reserved[9], 1, ErrorCode::PurchaseMigrationRequired);
+        let credited = u64::from_le_bytes(self.reserved[10..18].try_into().unwrap());
+        let additional = pool.saturating_sub(credited);
+        if additional > 0 {
+            self.reserved[10..18].copy_from_slice(&pool.to_le_bytes());
+        }
+        Ok(additional)
+    }
+
+    // [18] versions lifetime cash [19..27] and quantity [27..35]. These
+    // totals survive receipt eviction and contain actual cash, never credits.
+    pub fn payment_totals(&self) -> Result<(u64, u64)> {
+        match self.reserved[18] {
+            1 => Ok((
+                u64::from_le_bytes(self.reserved[19..27].try_into().unwrap()),
+                u64::from_le_bytes(self.reserved[27..35].try_into().unwrap()),
+            )),
+            0 if self.history_10.len() < 10 => self.history_totals(),
+            _ => err!(ErrorCode::PurchaseMigrationRequired),
+        }
+    }
+
+    pub fn record_payment(&mut self, amount: u64, quantity: u8) -> Result<()> {
+        require_gt!(quantity, 0, ErrorCode::InvalidPurchaseQty);
+        if self.reserved[18] == 0 && self.history_10.len() >= 10 {
+            // Keep legacy cash-only renewals available without inventing lost
+            // accounting. Credit or revenue reversal still requires migration.
+            return Ok(());
+        }
+        let (paid, qty) = self.payment_totals()?;
+        let paid = paid
+            .checked_add(amount)
+            .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
+        let qty = qty
+            .checked_add(u64::from(quantity))
+            .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
+        self.reserved[18] = 1;
+        self.reserved[19..27].copy_from_slice(&paid.to_le_bytes());
+        self.reserved[27..35].copy_from_slice(&qty.to_le_bytes());
+        Ok(())
+    }
+
+    pub fn total_active(&self, purchase_duration_secs: Option<i64>) -> Result<u64> {
+        Ok(self.total_active_at(purchase_duration_secs, Clock::get()?.unix_timestamp))
+    }
+
+    pub(crate) fn total_active_at(&self, duration: Option<i64>, now: i64) -> u64 {
+        if self.history_10.is_empty() {
+            return 0;
+        }
+        if let Some(duration) = duration {
+            if duration <= 0 {
+                return 0;
+            }
+            let remaining = (i128::from(self.expires_ts) - i128::from(now)).max(0);
+            // A partly elapsed unit remains active until its period ends.
+            ((remaining + i128::from(duration) - 1) / i128::from(duration)) as u64
+        } else if self.reserved[0] == 1 {
+            u64::from_le_bytes(self.reserved[1..9].try_into().unwrap())
+        } else {
+            self.history_10.iter().map(|h| u64::from(h.quantity)).sum()
+        }
     }
 }
 
@@ -138,7 +227,83 @@ impl Product {
         + ((PRODUCT_STR_LENGTH_MAX + 4) * 5) + 4 // str_20_a5
         + (256);
 
+    // Sticky across admin deletion/revenue adjustments. Existing counters also
+    // lock legacy products that predate this reserved-byte flag.
+    pub fn mark_purchased(&mut self) {
+        self.reserved[0] = 1;
+    }
+
+    pub fn can_change_mint(&self) -> bool {
+        self.reserved[0] == 0 && self.purchase_qty == 0 && self.purchase_revenue == 0
+    }
+
+    pub fn validate_economics(&self) -> Result<()> {
+        require_gt!(self.max_owned, 0, ErrorCode::InvalidMaxOwned);
+        if let Some(duration) = self.purchase_duration_secs {
+            require!(
+                duration > 0 && duration.checked_mul(i64::from(self.max_owned)).is_some(),
+                ErrorCode::InvalidPurchaseDuration
+            );
+        }
+        require!(
+            self.discount_bps <= 10_000 && self.qty_for_discount > 0,
+            ErrorCode::InvalidDiscount
+        );
+        Ok(())
+    }
+
+    pub fn payment_amount(&self, quantity: u8, credit: u64) -> Result<u64> {
+        self.validate_economics()?;
+        require_gt!(quantity, 0, ErrorCode::InvalidPurchaseQty);
+        let gross = self
+            .cost
+            .checked_mul(u64::from(quantity))
+            .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
+        require_gte!(gross, credit, ErrorCode::DowngradesNotSupported);
+        let net = gross - credit;
+        let discount = if quantity >= self.qty_for_discount {
+            (u128::from(net) * u128::from(self.discount_bps) / 10_000) as u64
+        } else {
+            0
+        };
+        Ok(net - discount)
+    }
+
+    pub fn purchase_expiry(&self, previous: i64, quantity: u8, now: i64) -> Result<i64> {
+        self.validate_economics()?;
+        require_gt!(quantity, 0, ErrorCode::InvalidPurchaseQty);
+        if let Some(duration) = self.purchase_duration_secs {
+            let remaining = (i128::from(previous) - i128::from(now)).max(0);
+            let extension = i128::from(duration) * i128::from(quantity);
+            require_gte!(
+                i128::from(duration) * i128::from(self.max_owned),
+                remaining + extension,
+                ErrorCode::MaxPurchaseQtyReached
+            );
+            i64::try_from(i128::from(previous.max(now)) + extension)
+                .map_err(|_| error!(ErrorCode::ArithmeticOverflow))
+        } else {
+            Ok(i64::MAX)
+        }
+    }
+
+    pub fn record_sale(&mut self, amount: u64, quantity: u8) -> Result<()> {
+        let revenue = self
+            .purchase_revenue
+            .checked_add(amount)
+            .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
+        let qty = self
+            .purchase_qty
+            .checked_add(u64::from(quantity))
+            .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
+        self.purchase_revenue = revenue;
+        self.purchase_qty = qty;
+        self.mark_purchased();
+        Ok(())
+    }
+
     pub fn validate(&mut self) -> Result<()> {
+        self.validate_economics()?;
         //checks
         let code = self.code_16.trim();
         require_gte!(

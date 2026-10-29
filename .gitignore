@@ -6,3 +6,10 @@ target
 node_modules
 test-ledger
 yarn-error.log
+
+.test-build
+coverage
+.env
+.env.*
+!.env.example
+*keypair.json

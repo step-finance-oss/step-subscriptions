@@ -15,6 +15,15 @@ pub const PURCHASE_SEED: &str = "purchase";
 
 #[derive(Accounts)]
 pub struct InitializeProgram<'info> {
+    // Bind bootstrap to this executable's actual upgrade authority.
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @InvalidAuthority)]
+    pub program: Program<'info, crate::program::StepSubscriptions>,
+
+    #[account(constraint = program_data.upgrade_authority_address == Some(upgrade_authority.key()) @InvalidAuthority)]
+    pub program_data: Account<'info, ProgramData>,
+
+    pub upgrade_authority: Signer<'info>,
+
     #[account(mut)]
     pub payer: Signer<'info>,
 
@@ -22,7 +31,7 @@ pub struct InitializeProgram<'info> {
         init,
         payer = payer,
         space = 8 + GlobalState::SIZE,
-        seeds = [ GLOBAL_STATE_SEED.as_ref() ],
+        seeds = [ GLOBAL_STATE_SEED.as_bytes() ],
         bump,
     )]
     pub global_state: Box<Account<'info, GlobalState>>,
@@ -36,7 +45,7 @@ pub struct ChangeGlobalState<'info> {
 
     #[account(
         mut,
-        seeds = [ GLOBAL_STATE_SEED.as_ref() ],
+        seeds = [ GLOBAL_STATE_SEED.as_bytes() ],
         bump = global_state.bump,
         constraint = global_state.is_authorized(authority.key()) @InvalidAuthority
     )]
@@ -53,7 +62,7 @@ pub struct CreateProduct<'info> {
     pub authority: Signer<'info>,
 
     #[account(
-        seeds = [ GLOBAL_STATE_SEED.as_ref() ],
+        seeds = [ GLOBAL_STATE_SEED.as_bytes() ],
         bump = global_state.bump,
         constraint = global_state.is_authorized(authority.key()) @InvalidAuthority
     )]
@@ -63,7 +72,7 @@ pub struct CreateProduct<'info> {
         init,
         payer = payer,
         space = 8 + Product::SIZE,
-        seeds = [ PRODUCT_SEED.as_ref(), code.trim().as_ref() ],
+        seeds = [ PRODUCT_SEED.as_bytes(), code.trim().as_bytes() ],
         bump,
     )]
     pub product: Box<Account<'info, Product>>,
@@ -79,7 +88,7 @@ pub struct UpdateProduct<'info> {
     pub authority: Signer<'info>,
 
     #[account(
-        seeds = [ GLOBAL_STATE_SEED.as_ref() ],
+        seeds = [ GLOBAL_STATE_SEED.as_bytes() ],
         bump = global_state.bump,
         constraint = global_state.is_authorized(authority.key()) @InvalidAuthority
     )]
@@ -97,11 +106,11 @@ pub struct PurchaseProduct<'info> {
 
     /// Account this purchase is regarding (usually owner)
     /// CHECK: this could be anything - we just use it for seed and reference
-    pub regarding: AccountInfo<'info>,
+    pub regarding: UncheckedAccount<'info>,
 
     /// The one and only state account
     #[account(
-        seeds = [ GLOBAL_STATE_SEED.as_ref() ],
+        seeds = [ GLOBAL_STATE_SEED.as_bytes() ],
         bump = global_state.bump,
     )]
     pub global_state: Box<Account<'info, GlobalState>>,
@@ -130,7 +139,7 @@ pub struct PurchaseProduct<'info> {
         init_if_needed,
         payer = payer,
         space = 8 + Purchase::SIZE,
-        seeds = [ PURCHASE_SEED.as_ref(), owner.key.as_ref(), product.key().as_ref(), regarding.key.as_ref() ],
+        seeds = [ PURCHASE_SEED.as_bytes(), owner.key.as_ref(), product.key().as_ref(), regarding.key.as_ref() ],
         bump,
     )]
     pub purchase: Box<Account<'info, Purchase>>,
@@ -147,13 +156,13 @@ pub struct DeletePurchase<'info> {
     #[account(mut)]
     /// The receiver of the closed purchase account's rents
     /// CHECK: the account to send the purchase account rent balance to
-    pub refundee: AccountInfo<'info>,
+    pub refundee: UncheckedAccount<'info>,
 
     //an authority
     pub authority: Signer<'info>,
 
     #[account(
-        seeds = [ GLOBAL_STATE_SEED.as_ref() ],
+        seeds = [ GLOBAL_STATE_SEED.as_bytes() ],
         bump = global_state.bump,
         constraint = global_state.is_authorized(authority.key()) @InvalidAuthority
     )]

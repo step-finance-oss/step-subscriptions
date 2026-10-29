@@ -2,25 +2,37 @@ use crate::errors::ErrorCode;
 use crate::ix_accounts::*;
 use crate::state;
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::sysvar::{self};
 use std::collections::HashSet;
 
-pub fn check_purchase_upgrade(ctx: &Context<PurchaseProduct>) -> Result<u64> {
+pub fn check_purchase_upgrade(ctx: &Context<PurchaseProduct>) -> Result<(u64, u64)> {
     let product_to_purchase = &ctx.accounts.product;
 
+    require_eq!(
+        ctx.remaining_accounts.len() % 2,
+        0,
+        ErrorCode::InvalidUpgradeAccounts
+    );
     if product_to_purchase.upgrade_group_32.is_none() {
-        return Ok(0);
+        require!(
+            ctx.remaining_accounts.is_empty(),
+            ErrorCode::InvalidUpgradeAccounts
+        );
+        return Ok((0, 0));
     }
 
     let prev_accounts = ctx.remaining_accounts.chunks_exact(2); // [product, purchase, ...]
-    let mut total_already_paid = 0;
+    let mut permanent_pool = 0_u64;
+    let mut timed_credit = 0_u64;
+    let current_time = Clock::get()?.unix_timestamp;
     let mut purchase_hashset = HashSet::new();
     for c in prev_accounts {
         let product_key = c[0].key;
         let purchase_key = c[1].key;
 
-        let product = Account::<state::Product>::try_from(&c[0]).unwrap();
-        let mut purchase = Account::<state::Purchase>::try_from(&c[1]).unwrap();
+        require!(c[1].is_writable, ErrorCode::InvalidUpgradeAccounts);
+        let product = Account::<state::Product>::try_from(&c[0])?;
+        let mut purchase = Account::<state::Purchase>::try_from(&c[1])?;
+        product.validate_economics()?;
 
         // check purchase is not itself
         require_keys_neq!(
@@ -55,16 +67,28 @@ pub fn check_purchase_upgrade(ctx: &Context<PurchaseProduct>) -> Result<u64> {
             return err!(ErrorCode::InvalidUpgradeGroup);
         }
 
+        // A history amount is denominated in its original, now-immutable mint.
+        require_keys_eq!(
+            product.cost_mint,
+            product_to_purchase.cost_mint,
+            ErrorCode::InvalidPaymentMint
+        );
+
         // check that all purchases are distinct
         if !purchase_hashset.insert(purchase_key) {
             return err!(ErrorCode::DistinctPurchases);
         }
 
-        let current_time = sysvar::clock::Clock::get().unwrap().unix_timestamp;
         let mut expires_ts = purchase.expires_ts;
 
-        if expires_ts < current_time {
+        if expires_ts <= current_time {
             continue; // already expired
+        }
+
+        if product.purchase_duration_secs.is_none() {
+            permanent_pool = permanent_pool
+                .checked_add(purchase.payment_totals()?.0)
+                .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
         }
 
         for history in purchase.history_10.iter_mut().rev() {
@@ -73,27 +97,46 @@ pub fn check_purchase_upgrade(ctx: &Context<PurchaseProduct>) -> Result<u64> {
                 if history.refunded.is_some() {
                     break;
                 }
-                let start_date = expires_ts - (history.quantity as i64 * purchase_duration_secs);
-                // prorate
+                if history.quantity == 0 && history.amount_paid == 0 {
+                    continue;
+                }
+                require_gt!(history.quantity, 0, ErrorCode::InvalidPurchaseQty);
+                let period = purchase_duration_secs
+                    .checked_mul(i64::from(history.quantity))
+                    .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
+                let start_date = expires_ts
+                    .checked_sub(period)
+                    .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
                 if start_date < current_time {
-                    let percent_through = (current_time - start_date) as f64
-                        / (purchase_duration_secs * history.quantity as i64) as f64;
-                    require_gte!(1.0, percent_through, ErrorCode::InvalidPercentThrough);
-                    let remaining_unused_pct = 1.0 - percent_through;
-                    let amount_refunded =
-                        (history.amount_paid as f64 * remaining_unused_pct) as u64;
-                    total_already_paid += amount_refunded;
+                    let elapsed = current_time
+                        .checked_sub(start_date)
+                        .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
+                    let amount_refunded = prorated_credit(history.amount_paid, elapsed, period)?;
+                    timed_credit = timed_credit
+                        .checked_add(amount_refunded)
+                        .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
                     history.refunded = Some(amount_refunded);
                     break;
                 }
                 expires_ts = start_date;
+                timed_credit = timed_credit
+                    .checked_add(history.amount_paid)
+                    .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
             }
-            total_already_paid += history.amount_paid;
             history.refunded = Some(history.amount_paid);
         }
 
         purchase.exit(ctx.program_id)?;
     }
 
-    Ok(total_already_paid)
+    Ok((permanent_pool, timed_credit))
+}
+
+pub(crate) fn prorated_credit(amount_paid: u64, elapsed: i64, duration: i64) -> Result<u64> {
+    require!(
+        duration > 0 && elapsed >= 0 && elapsed <= duration,
+        ErrorCode::InvalidPercentThrough
+    );
+    let remaining = (duration - elapsed) as u128;
+    Ok((u128::from(amount_paid) * remaining / duration as u128) as u64)
 }

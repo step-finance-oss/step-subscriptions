@@ -16,7 +16,6 @@ declare_id!("SsubM7pGA83VRnCodXVrxU2GZNBQzBYgzPUYBssCwU1");
 #[program]
 pub mod step_subscriptions {
     use super::*;
-    use anchor_lang::solana_program::sysvar::{self};
     use anchor_spl::token::Transfer;
 
     pub fn initialize_program(
@@ -25,7 +24,7 @@ pub mod step_subscriptions {
         payment_wallet: Pubkey,
     ) -> Result<()> {
         let gs = &mut ctx.accounts.global_state;
-        gs.bump = ctx.bumps["global_state"];
+        gs.bump = ctx.bumps.global_state;
         gs.authorities[0] = authority;
         gs.authorities[1] = Pubkey::default();
         gs.payment_wallet = payment_wallet;
@@ -74,13 +73,13 @@ pub mod step_subscriptions {
         assigned_roles: Vec<String>,
     ) -> Result<()> {
         let product = &mut ctx.accounts.product;
-        product.bump = ctx.bumps["product"];
+        product.bump = ctx.bumps.product;
         product.name_32 = name;
         product.blurb_128 = blurb;
         product.family_32 = family;
         product.upgrade_group_32 = upgrade_group;
         product.code_16 = code;
-        product.created_ts = sysvar::clock::Clock::get().unwrap().unix_timestamp;
+        product.created_ts = Clock::get()?.unix_timestamp;
         product.cost_mint = cost_mint;
         product.cost = cost;
         product.discount_bps = 0;
@@ -112,6 +111,10 @@ pub mod step_subscriptions {
 
     pub fn update_product_mint(ctx: Context<UpdateProduct>, cost_mint: Pubkey) -> Result<()> {
         let product = &mut ctx.accounts.product;
+        require!(
+            product.cost_mint == cost_mint || product.can_change_mint(),
+            ErrorCode::ProductMintLocked
+        );
         product.cost_mint = cost_mint;
         product.validate()?;
 
@@ -126,6 +129,7 @@ pub mod step_subscriptions {
         let product = &mut ctx.accounts.product;
         product.discount_bps = discount_bps;
         product.qty_for_discount = qty_for_discount;
+        product.validate_economics()?;
 
         Ok(())
     }
@@ -182,33 +186,51 @@ pub mod step_subscriptions {
     }
 
     pub fn delete_purchase(ctx: Context<DeletePurchase>, remove_revenue: bool) -> Result<()> {
+        let product = &mut ctx.accounts.product;
+        // A legacy purchase also establishes the permanent mint lock.
+        product.mark_purchased();
         if remove_revenue {
-            let product = &mut ctx.accounts.product;
-            let purchase = &ctx.accounts.purchase;
-
-            let (rev, qty) = purchase
-                .history_10
-                .iter()
-                .fold((0, 0), |a, e| (a.0 + e.amount_paid, a.1 + e.quantity));
-            product.purchase_revenue -= rev;
-            product.purchase_qty -= qty as u64;
+            let (rev, qty) = ctx.accounts.purchase.payment_totals()?;
+            product.purchase_revenue = product
+                .purchase_revenue
+                .checked_sub(rev)
+                .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
+            product.purchase_qty = product
+                .purchase_qty
+                .checked_sub(qty)
+                .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
         }
         Ok(())
     }
 
     pub fn purchase_product(ctx: Context<PurchaseProduct>, quantity: u8) -> Result<()> {
-        let total_already_paid = std::cmp::max(0, check_purchase_upgrade(&ctx)?);
+        require_gt!(quantity, 0, ErrorCode::InvalidPurchaseQty);
+        ctx.accounts.product.validate_economics()?;
+        let (permanent_pool, timed_credit) = check_purchase_upgrade(&ctx)?;
+        let total_already_paid = ctx
+            .accounts
+            .purchase
+            .permanent_upgrade_credit(permanent_pool)?
+            .checked_add(timed_credit)
+            .ok_or(error!(ErrorCode::ArithmeticOverflow))?;
+        if ctx.accounts.product.purchase_duration_secs.is_none() {
+            ctx.accounts
+                .purchase
+                .add_permanent_quantity(quantity, ctx.accounts.product.max_owned)?;
+        }
 
         let product = &mut ctx.accounts.product;
         let purchase = &mut ctx.accounts.purchase;
 
-        require_gte!(
-            product.max_owned,
-            purchase.total_active(product.purchase_duration_secs),
-            ErrorCode::MaxPurchaseQtyReached
-        );
+        if product.purchase_duration_secs.is_some() {
+            require_gte!(
+                u64::from(product.max_owned),
+                purchase.total_active(product.purchase_duration_secs)?,
+                ErrorCode::MaxPurchaseQtyReached
+            );
+        }
 
-        let current_time = sysvar::clock::Clock::get().unwrap().unix_timestamp;
+        let current_time = Clock::get()?.unix_timestamp;
         let mut new_purchase_history = state::PurchaseHistory {
             amount_paid: 0,
             quantity,
@@ -216,41 +238,14 @@ pub mod step_subscriptions {
             refunded: None,
         };
 
-        if let Some(purchase_duration_secs) = product.purchase_duration_secs {
-            let max_duration = purchase_duration_secs * product.max_owned as i64;
-            let duration_remaining = std::cmp::max(0, purchase.expires_ts - current_time);
-
-            let duration_for_qty = purchase_duration_secs * (quantity as i64);
-            require_gte!(
-                max_duration,
-                duration_remaining + duration_for_qty,
-                ErrorCode::MaxPurchaseQtyReached
-            );
-
-            if purchase.expires_ts > current_time {
-                purchase.expires_ts += duration_for_qty;
-            } else {
-                purchase.expires_ts = current_time + duration_for_qty;
-            }
-        } else {
-            purchase.expires_ts = std::i64::MAX;
-        }
-
-        require_gte!(
-            product.cost * (quantity as u64),
-            total_already_paid,
-            ErrorCode::DowngradesNotSupported
-        );
-
-        let mut amount_to_pay = (product.cost * (quantity as u64)) - total_already_paid;
+        purchase.expires_ts =
+            product.purchase_expiry(purchase.expires_ts, quantity, current_time)?;
+        let amount_to_pay = product.payment_amount(quantity, total_already_paid)?;
         if amount_to_pay > 0 {
-            if quantity >= product.qty_for_discount {
-                amount_to_pay -= amount_to_pay * product.discount_bps / 10000;
-            }
             //take payment
             transfer(
                 CpiContext::new(
-                    ctx.accounts.token_program.to_account_info(),
+                    anchor_spl::token::ID,
                     Transfer {
                         authority: ctx.accounts.payment_from_token_authority.to_account_info(),
                         from: ctx.accounts.payment_from_token_account.to_account_info(),
@@ -263,12 +258,12 @@ pub mod step_subscriptions {
             new_purchase_history.amount_paid += amount_to_pay;
         }
 
-        purchase.bump = ctx.bumps["purchase"];
+        purchase.bump = ctx.bumps.purchase;
         purchase.owner = ctx.accounts.owner.key();
         purchase.regarding = ctx.accounts.regarding.key();
         purchase.product = product.key();
-        product.purchase_revenue += amount_to_pay;
-        product.purchase_qty += quantity as u64;
+        purchase.record_payment(amount_to_pay, quantity)?;
+        product.record_sale(amount_to_pay, quantity)?;
 
         emit_cpi!(PurchaseEvent {
             product: product.key(),
@@ -287,3 +282,6 @@ pub mod step_subscriptions {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;

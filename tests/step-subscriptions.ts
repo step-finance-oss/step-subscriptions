@@ -1,5 +1,5 @@
-import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
+import { Program } from "@anchor-lang/core";
 import * as token from "@solana/spl-token";
 import { assert } from "chai";
 import { StepSubscriptions } from "../target/types/step_subscriptions";
@@ -48,6 +48,14 @@ describe("step-subscriptions", () => {
   const program = anchor.workspace
     .StepSubscriptions as Program<StepSubscriptions>;
   const provider = program.provider as anchor.AnchorProvider;
+  const bootstrapAccounts = {
+    upgradeAuthority: provider.wallet.publicKey,
+    program: program.programId,
+    programData: PublicKey.findProgramAddressSync(
+      [program.programId.toBuffer()],
+      new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111")
+    )[0],
+  };
 
   const usdcMintKeypair = anchor.web3.Keypair.generate();
   const usdcMint = usdcMintKeypair.publicKey;
@@ -257,7 +265,8 @@ describe("step-subscriptions", () => {
 
       await program.methods
         .initializeProgram(admins.real.publicKey, treasuryWallet.publicKey)
-        .accounts({
+        .accountsPartial({
+          ...bootstrapAccounts,
           payer: admins.real.publicKey,
         })
         .signers([admins.real])
@@ -291,7 +300,8 @@ describe("step-subscriptions", () => {
       await asyncForEach([admins.real, admins.malicious], (executorKey) => {
         return program.methods
           .initializeProgram(executorKey.publicKey, treasuryWallet.publicKey)
-          .accounts({
+          .accountsPartial({
+            ...bootstrapAccounts,
             payer: executorKey.publicKey,
           })
           .signers([executorKey])
@@ -301,7 +311,10 @@ describe("step-subscriptions", () => {
               throw "should have failed";
             },
             (a) => {
-              assert.isTrue(a.logs[3].includes("already in use"));
+              assert.isTrue(
+                a.logs.some((line: string) => line.includes("already in use")),
+                JSON.stringify(a.logs)
+              );
             }
           );
       });
@@ -333,7 +346,7 @@ describe("step-subscriptions", () => {
       //malicious dude can't change
       await program.methods
         .updateStateAuthority(admins.malicious.publicKey, 1, false)
-        .accounts({
+        .accountsPartial({
           authority: admins.malicious.publicKey,
         })
         .signers([admins.malicious])
@@ -350,7 +363,7 @@ describe("step-subscriptions", () => {
       //temp make alice and bob admins
       await program.methods
         .updateStateAuthority(actors.bob.publicKey, 1, false)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
         })
         .signers([admins.real])
@@ -359,7 +372,7 @@ describe("step-subscriptions", () => {
       // removing self
       await program.methods
         .updateStateAuthority(actors.alice.publicKey, 0, true)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
         })
         .signers([admins.real])
@@ -382,7 +395,7 @@ describe("step-subscriptions", () => {
       //now admin can't change back
       await program.methods
         .updateStateAuthority(admins.real.publicKey, 0, false)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
         })
         .signers([admins.real])
@@ -399,7 +412,7 @@ describe("step-subscriptions", () => {
       //bob is nice and set back
       await program.methods
         .updateStateAuthority(admins.real.publicKey, 0, false)
-        .accounts({
+        .accountsPartial({
           authority: actors.bob.publicKey,
         })
         .signers([actors.bob])
@@ -437,7 +450,7 @@ describe("step-subscriptions", () => {
 
       await program.methods
         .updateStatePaymentWallet(actors.alice.publicKey)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
         })
         .signers([admins.real])
@@ -451,7 +464,7 @@ describe("step-subscriptions", () => {
 
       await program.methods
         .updateStatePaymentWallet(actors.malicious.publicKey)
-        .accounts({
+        .accountsPartial({
           authority: actors.malicious.publicKey,
         })
         .signers([actors.malicious])
@@ -474,7 +487,7 @@ describe("step-subscriptions", () => {
       // reset back to treasury
       await program.methods
         .updateStatePaymentWallet(admins.real.publicKey)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
         })
         .signers([admins.real])
@@ -503,7 +516,7 @@ describe("step-subscriptions", () => {
           12,
           ["API"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -531,7 +544,7 @@ describe("step-subscriptions", () => {
           12,
           ["API"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -559,7 +572,7 @@ describe("step-subscriptions", () => {
           12,
           ["API"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -587,7 +600,7 @@ describe("step-subscriptions", () => {
           12,
           ["API"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -615,7 +628,7 @@ describe("step-subscriptions", () => {
           12,
           ["API"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -643,9 +656,20 @@ describe("step-subscriptions", () => {
           new anchor.BN(1_000_000_000),
           new anchor.BN(ONE_MONTH_SECS),
           12,
-          ["0123456789","0123456789","0123456789","0123456789","0123456789","0123456789","0123456789","0123456789","0123456789","0123456789"]
+          [
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+            "0123456789",
+          ]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -667,7 +691,7 @@ describe("step-subscriptions", () => {
           12,
           ["API"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -706,7 +730,7 @@ describe("step-subscriptions", () => {
           12,
           ["API"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.malicious.publicKey,
           authority: admins.malicious.publicKey,
         })
@@ -736,7 +760,7 @@ describe("step-subscriptions", () => {
           6,
           ["API2"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -768,7 +792,7 @@ describe("step-subscriptions", () => {
 
       await program.methods
         .updateProductActiveState(true)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productSKU100,
         })
@@ -777,7 +801,7 @@ describe("step-subscriptions", () => {
 
       await program.methods
         .updateProductActiveState(true)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productSKU101,
         })
@@ -810,7 +834,7 @@ describe("step-subscriptions", () => {
           "900",
           "1000",
         ])
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productSKU100,
         })
@@ -845,7 +869,7 @@ describe("step-subscriptions", () => {
           new anchor.BN(4),
           new anchor.BN(5),
         ])
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productSKU100,
         })
@@ -854,7 +878,7 @@ describe("step-subscriptions", () => {
 
       await program.methods
         .updateProductStr(["1", "2", "3", "4", "5"])
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productSKU100,
         })
@@ -883,7 +907,7 @@ describe("step-subscriptions", () => {
       // Can't purchase inactive products
       await program.methods
         .updateProductActiveState(false)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productSKU100,
         })
@@ -892,7 +916,7 @@ describe("step-subscriptions", () => {
 
       await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -915,7 +939,7 @@ describe("step-subscriptions", () => {
       // Re-activate
       await program.methods
         .updateProductActiveState(true)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productSKU100,
         })
@@ -926,7 +950,7 @@ describe("step-subscriptions", () => {
     it("Cannot purchase more then max ownable", async () => {
       await program.methods
         .purchaseProduct(13)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -949,7 +973,7 @@ describe("step-subscriptions", () => {
       // Buy half the max
       const result = await program.methods
         .purchaseProduct(6)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -973,7 +997,7 @@ describe("step-subscriptions", () => {
       // Try buy max+1
       await program.methods
         .purchaseProduct(7)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1008,7 +1032,7 @@ describe("step-subscriptions", () => {
           4,
           ["API2"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -1017,7 +1041,7 @@ describe("step-subscriptions", () => {
 
       await program.methods
         .updateProductActiveState(true)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productSKUFast,
         })
@@ -1026,7 +1050,7 @@ describe("step-subscriptions", () => {
 
       await program.methods
         .purchaseProduct(4)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1040,7 +1064,7 @@ describe("step-subscriptions", () => {
 
       await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1065,7 +1089,7 @@ describe("step-subscriptions", () => {
 
       await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1080,7 +1104,7 @@ describe("step-subscriptions", () => {
       // Try buy max+1 again
       await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1108,7 +1132,7 @@ describe("step-subscriptions", () => {
 
       const result = await program.methods
         .purchaseProduct(2)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1140,24 +1164,19 @@ describe("step-subscriptions", () => {
 
       //check the aggregate was updated
       product = await program.account.product.fetch(productSKU100);
-      assert.equal(
-        product.purchaseQty.toNumber(),
-        priorQty + 2,
-        "purchaseQty"
-      );
+      assert.equal(product.purchaseQty.toNumber(), priorQty + 2, "purchaseQty");
       assert.equal(
         product.purchaseRevenue.toNumber(),
         priorRev + 2_000_000_000,
         "purchaseRevenue"
       );
-      
     });
 
     it("Can purchase at discount", async () => {
       // Set 25% discount for 6 month purchase
       await program.methods
         .updateProductDiscount(new anchor.BN(2500), 6)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productSKU101,
         })
@@ -1166,7 +1185,7 @@ describe("step-subscriptions", () => {
 
       const result = await program.methods
         .purchaseProduct(6)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1195,7 +1214,7 @@ describe("step-subscriptions", () => {
     it("Cannot purchase more than max duration", async () => {
       await program.methods
         .purchaseProduct(3)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1232,7 +1251,7 @@ describe("step-subscriptions", () => {
           1,
           ["API"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -1240,7 +1259,7 @@ describe("step-subscriptions", () => {
         .rpc();
       await program.methods
         .updateProductActiveState(true)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productTX2022BasicKey,
         })
@@ -1260,7 +1279,7 @@ describe("step-subscriptions", () => {
           1,
           ["API"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -1268,7 +1287,7 @@ describe("step-subscriptions", () => {
         .rpc();
       await program.methods
         .updateProductActiveState(true)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productTX2022ProKey,
         })
@@ -1288,7 +1307,7 @@ describe("step-subscriptions", () => {
           1,
           ["API"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -1296,7 +1315,7 @@ describe("step-subscriptions", () => {
         .rpc();
       await program.methods
         .updateProductActiveState(true)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productTX2022EnterpriseKey,
         })
@@ -1307,7 +1326,7 @@ describe("step-subscriptions", () => {
     it("Can purchase initial product", async () => {
       const result = await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1346,7 +1365,7 @@ describe("step-subscriptions", () => {
       // upgrade to pro
       const result = await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1371,9 +1390,8 @@ describe("step-subscriptions", () => {
         .rpcAndKeys();
 
       const purchaseTX2022ProKey = result.pubkeys.purchase;
-      let purchasePro = await program.account.purchase.fetch(
-        purchaseTX2022ProKey
-      );
+      let purchasePro =
+        await program.account.purchase.fetch(purchaseTX2022ProKey);
       assert.equal(purchasePro.expiresTs.toString(), I64_MAX.toString());
       assert.equal(purchasePro.history10[0].quantity, 1);
       assert.equal(
@@ -1406,7 +1424,7 @@ describe("step-subscriptions", () => {
       // upgrade to enterprise
       const result = await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1456,7 +1474,7 @@ describe("step-subscriptions", () => {
     it("Can upgrade to final product without previous tiers", async () => {
       let result = await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.bob.publicKey,
           owner: actors.bob.publicKey,
           regarding: actors.bob.publicKey,
@@ -1483,7 +1501,7 @@ describe("step-subscriptions", () => {
       // upgrade to enterprise
       result = await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.bob.publicKey,
           owner: actors.bob.publicKey,
           regarding: actors.bob.publicKey,
@@ -1536,7 +1554,7 @@ describe("step-subscriptions", () => {
           12,
           ["API"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -1544,7 +1562,7 @@ describe("step-subscriptions", () => {
         .rpc();
       await program.methods
         .updateProductActiveState(true)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productAPIBasicKey,
         })
@@ -1564,7 +1582,7 @@ describe("step-subscriptions", () => {
           12,
           ["API"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -1572,7 +1590,7 @@ describe("step-subscriptions", () => {
         .rpc();
       await program.methods
         .updateProductActiveState(true)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productAPIProKey,
         })
@@ -1592,7 +1610,7 @@ describe("step-subscriptions", () => {
           12,
           ["API"]
         )
-        .accounts({
+        .accountsPartial({
           payer: admins.real.publicKey,
           authority: admins.real.publicKey,
         })
@@ -1600,7 +1618,7 @@ describe("step-subscriptions", () => {
         .rpc();
       await program.methods
         .updateProductActiveState(true)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           product: productAPIEnterpriseKey,
         })
@@ -1611,7 +1629,7 @@ describe("step-subscriptions", () => {
     it("Can purchase initial product", async () => {
       const result = await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1625,9 +1643,8 @@ describe("step-subscriptions", () => {
 
       const purchaseAPIBasicKey = result.pubkeys.purchase;
 
-      let purchaseBasic = await program.account.purchase.fetch(
-        purchaseAPIBasicKey
-      );
+      let purchaseBasic =
+        await program.account.purchase.fetch(purchaseAPIBasicKey);
 
       assert.isAtLeast(
         purchaseBasic.expiresTs.toNumber(),
@@ -1662,7 +1679,7 @@ describe("step-subscriptions", () => {
       // upgrade to pro
       const result = await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1688,9 +1705,8 @@ describe("step-subscriptions", () => {
 
       const purchaseAPIProKey = result.pubkeys.purchase;
 
-      let purchaseBasic = await program.account.purchase.fetch(
-        purchaseAPIBasicKey
-      );
+      let purchaseBasic =
+        await program.account.purchase.fetch(purchaseAPIBasicKey);
       let purchasePro = await program.account.purchase.fetch(purchaseAPIProKey);
 
       assert.isAtLeast(
@@ -1731,7 +1747,7 @@ describe("step-subscriptions", () => {
       // buy another pro plan
       const result = await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1813,7 +1829,7 @@ describe("step-subscriptions", () => {
       // upgrade to enterprise
       const result = await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1894,7 +1910,7 @@ describe("step-subscriptions", () => {
       // downgrade to pro
       await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.alice.publicKey,
           owner: actors.alice.publicKey,
           regarding: actors.alice.publicKey,
@@ -1938,12 +1954,14 @@ describe("step-subscriptions", () => {
     });
 
     it("Admin can delete a purchase", async () => {
-        let product = await program.account.product.fetchNullable(productAPIEnterpriseKey);
-        assert.isNotNull(product);
-        const preQty = product.purchaseQty.toNumber();
-        const preRev = product.purchaseRevenue.toNumber();
+      let product = await program.account.product.fetchNullable(
+        productAPIEnterpriseKey
+      );
+      assert.isNotNull(product);
+      const preQty = product.purchaseQty.toNumber();
+      const preRev = product.purchaseRevenue.toNumber();
 
-        const purchaseAPIEnterpriseKey = PublicKey.findProgramAddressSync(
+      const purchaseAPIEnterpriseKey = PublicKey.findProgramAddressSync(
         [
           Buffer.from("purchase"),
           actors.alice.publicKey.toBuffer(),
@@ -1955,7 +1973,7 @@ describe("step-subscriptions", () => {
 
       await program.methods
         .deletePurchase(true)
-        .accounts({
+        .accountsPartial({
           authority: admins.real.publicKey,
           purchase: purchaseAPIEnterpriseKey,
           refundee: admins.real.publicKey,
@@ -1963,13 +1981,17 @@ describe("step-subscriptions", () => {
         .signers([admins.real])
         .rpc();
 
-        const purchase = await program.account.purchase.fetchNullable(purchaseAPIEnterpriseKey);
-        assert.isNull(purchase);
+      const purchase = await program.account.purchase.fetchNullable(
+        purchaseAPIEnterpriseKey
+      );
+      assert.isNull(purchase);
 
-        product = await program.account.product.fetchNullable(productAPIEnterpriseKey);
-        assert.isNotNull(product);
-        assert.equal(product.purchaseQty.toNumber(), preQty - 1);
-        assert.equal(product.purchaseRevenue.toNumber(), preRev - 5_000_000_000);
+      product = await program.account.product.fetchNullable(
+        productAPIEnterpriseKey
+      );
+      assert.isNotNull(product);
+      assert.equal(product.purchaseQty.toNumber(), preQty - 1);
+      assert.equal(product.purchaseRevenue.toNumber(), preRev - 5_000_000_000);
     });
   });
 
@@ -1988,7 +2010,7 @@ describe("step-subscriptions", () => {
       //try as alice
       await program.methods
         .deletePurchase(true)
-        .accounts({
+        .accountsPartial({
           authority: actors.alice.publicKey,
           purchase: purchaseAPIBasicKey,
           refundee: actors.alice.publicKey,
@@ -2004,34 +2026,35 @@ describe("step-subscriptions", () => {
           }
         );
 
-        //try without admin sig
-        await program.methods
-          .deletePurchase(true)
-          .accounts({
-            authority: admins.real.publicKey,
-            purchase: purchaseAPIBasicKey,
-            refundee: admins.real.publicKey,
-          })
-          .signers([actors.alice])
-          .rpc()
-          .then(
-            (_) => {
-              throw "should have failed";
-            },
-            (a) => {
-              assert.isTrue(a.toString().includes("Error: unknown signer:"));
-            }
-          );
+      //try without admin sig
+      await program.methods
+        .deletePurchase(true)
+        .accountsPartial({
+          authority: admins.real.publicKey,
+          purchase: purchaseAPIBasicKey,
+          refundee: admins.real.publicKey,
+        })
+        .signers([actors.alice])
+        .rpc()
+        .then(
+          (_) => {
+            throw "should have failed";
+          },
+          (a) => {
+            assert.isTrue(a.toString().includes("Error: unknown signer:"));
+          }
+        );
 
-        const purchase = await program.account.purchase.fetchNullable(purchaseAPIBasicKey);
-        assert.isNotNull(purchase);
+      const purchase =
+        await program.account.purchase.fetchNullable(purchaseAPIBasicKey);
+      assert.isNotNull(purchase);
     });
-    
+
     it("Can't upgrade from another user's purchase", async () => {
       //bob never bought api so he does that now
       const result1 = await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.bob.publicKey,
           owner: actors.bob.publicKey,
           regarding: actors.bob.publicKey,
@@ -2046,7 +2069,7 @@ describe("step-subscriptions", () => {
       //along comes joe and tries to get a discount by using bob's purchase receipt
       const result2 = await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.joe.publicKey,
           owner: actors.joe.publicKey,
           regarding: actors.joe.publicKey,
@@ -2094,7 +2117,7 @@ describe("step-subscriptions", () => {
       //bob tries to upgrade but for alice's wallet as the regarding
       const result1 = await program.methods
         .purchaseProduct(1)
-        .accounts({
+        .accountsPartial({
           payer: actors.bob.publicKey,
           owner: actors.bob.publicKey,
           regarding: actors.alice.publicKey, //note: alice
@@ -2129,6 +2152,128 @@ describe("step-subscriptions", () => {
     });
   });
 
+  describe("Additional account constraint coverage", () => {
+    async function expectCode(promise: Promise<unknown>, expected: string[]) {
+      let caught: unknown;
+      try {
+        await promise;
+      } catch (error) {
+        caught = error;
+      }
+      assert.instanceOf(caught, anchor.AnchorError);
+      const error = caught as anchor.AnchorError;
+      assert.include(expected, error.error.errorCode.code);
+    }
+
+    function buyerAccounts(product: PublicKey) {
+      return {
+        payer: actors.alice.publicKey,
+        owner: actors.alice.publicKey,
+        regarding: actors.alice.publicKey,
+        product,
+        paymentFromTokenAccount: purchaserTokenAccounts.alice,
+        paymentFromTokenAuthority: actors.alice.publicKey,
+        paymentToTokenAccount: treasuryTokenAccounts.real,
+      };
+    }
+
+    it("Rejects an unauthorized product price change without mutating the price", async () => {
+      const before = await program.account.product.fetch(productSKU100);
+      await expectCode(
+        program.methods
+          .updateProductCost(new anchor.BN(1))
+          .accountsPartial({
+            authority: admins.malicious.publicKey,
+            product: productSKU100,
+          })
+          .signers([admins.malicious])
+          .rpc(),
+        ["InvalidAuthority"]
+      );
+      const after = await program.account.product.fetch(productSKU100);
+      assert.equal(after.cost.toString(), before.cost.toString());
+    });
+
+    it("Rejects a token payment redirected to a different treasury owner", async () => {
+      const before = await token.getAccount(
+        provider.connection,
+        purchaserTokenAccounts.alice
+      );
+      await expectCode(
+        program.methods
+          .purchaseProduct(1)
+          .accountsPartial({
+            ...buyerAccounts(productTX2022BasicKey),
+            paymentToTokenAccount: treasuryTokenAccounts.malicious,
+          })
+          .signers([actors.alice])
+          .rpc(),
+        ["ConstraintTokenOwner", "ConstraintAssociated"]
+      );
+      const after = await token.getAccount(
+        provider.connection,
+        purchaserTokenAccounts.alice
+      );
+      assert.equal(after.amount, before.amount);
+    });
+
+    it("Rejects a purchase used as its own upgrade credit", async () => {
+      const purchaseKey = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("purchase"),
+          actors.alice.publicKey.toBuffer(),
+          productTX2022BasicKey.toBuffer(),
+          actors.alice.publicKey.toBuffer(),
+        ],
+        program.programId
+      )[0];
+      await expectCode(
+        program.methods
+          .purchaseProduct(1)
+          .accountsPartial(buyerAccounts(productTX2022BasicKey))
+          .remainingAccounts([
+            {
+              pubkey: productTX2022BasicKey,
+              isWritable: false,
+              isSigner: false,
+            },
+            { pubkey: purchaseKey, isWritable: true, isSigner: false },
+          ])
+          .signers([actors.alice])
+          .rpc(),
+        ["DistinctPurchases"]
+      );
+    });
+
+    it("Rejects upgrade credit from a different product group", async () => {
+      const purchaseKey = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("purchase"),
+          actors.alice.publicKey.toBuffer(),
+          productTX2022BasicKey.toBuffer(),
+          actors.alice.publicKey.toBuffer(),
+        ],
+        program.programId
+      )[0];
+      await expectCode(
+        program.methods
+          .purchaseProduct(1)
+          .accountsPartial(buyerAccounts(productAPIEnterpriseKey))
+          .remainingAccounts([
+            {
+              pubkey: productTX2022BasicKey,
+              isWritable: false,
+              isSigner: false,
+            },
+            { pubkey: purchaseKey, isWritable: true, isSigner: false },
+          ])
+          .signers([actors.alice])
+          .rpc(),
+        ["InvalidUpgradeGroup"]
+      );
+    });
+  });
+
   describe("Integration tests", () => {
     it("Can get users purchases", async () => {
       const purchaseAccounts = await program.account.purchase.all([
@@ -2144,9 +2289,8 @@ describe("step-subscriptions", () => {
         (pa) => pa.account.product
       );
 
-      const products = await program.account.product.fetchMultiple(
-        userOwnedProducts
-      );
+      const products =
+        await program.account.product.fetchMultiple(userOwnedProducts);
 
       const usersRoles: string[] = [];
       for (const p of products) {

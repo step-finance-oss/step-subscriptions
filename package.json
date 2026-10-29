@@ -1,20 +1,39 @@
 {
+  "name": "step-subscriptions",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "scripts": {
-    "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
-    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
+    "build": "anchor build --ignore-keys --arch v3",
+    "test": "npm run test:unit && npm run test:integration && SKIP_BUILD=1 npm run test:security",
+    "test:unit": "cargo test --workspace --locked",
+    "typecheck": "tsc --noEmit",
+    "test:client": "tsc && mocha --timeout 120000 .test-build/tests/step-subscriptions.js",
+    "lint": "prettier --trailing-comma es5 \"{tests,migrations}/**/*.ts\" --check",
+    "lint:fix": "prettier --trailing-comma es5 \"{tests,migrations}/**/*.ts\" --write",
+    "test:security:client": "tsc && mocha --timeout 120000 .test-build/tests/security-regressions.js",
+    "test:security": "TEST_SUITE=test:security:client bash scripts/test-local.sh",
+    "test:integration": "bash scripts/test-local.sh"
   },
   "dependencies": {
-    "@coral-xyz/anchor": "^0.28.0",
-    "@solana/spl-token": "^0.3.8"
+    "@anchor-lang/core": "1.2.2",
+    "@solana/spl-token": "0.4.15",
+    "@solana/web3.js": "1.99.0"
   },
   "devDependencies": {
-    "chai": "^4.3.4",
-    "mocha": "^9.0.3",
-    "ts-mocha": "^10.0.0",
-    "@types/bn.js": "^5.1.0",
-    "@types/chai": "^4.3.0",
-    "@types/mocha": "^9.0.0",
-    "typescript": "^4.3.5",
-    "prettier": "^2.6.2"
+    "chai": "6.3.0",
+    "mocha": "12.0.3",
+    "@types/bn.js": "5.2.0",
+    "@types/chai": "5.2.3",
+    "@types/mocha": "10.0.10",
+    "@types/node": "^22.0.0",
+    "typescript": "7.0.2",
+    "prettier": "3.9.10"
+  },
+  "overrides": {
+    "toml": "5.0.1",
+    "jayson": "5.0.0"
   }
 }

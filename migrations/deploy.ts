@@ -2,7 +2,7 @@
 // single deploy script that's invoked from the CLI, injecting a provider
 // configured from the workspace's Anchor.toml.
 
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import { StepSubscriptions } from "../target/types/step_subscriptions";
 
 const I64_MAX = new anchor.BN("9223372036854775807");
@@ -67,7 +67,7 @@ module.exports = async function (provider) {
   // for (const purchase of purchases) {
   //   if (purchase.account.owner.toBase58() === "2Vr9vsz365wYNh19NMpHnJRuarepjBXhTkCgk8WASywN") {
   //     console.log(`Deleting purchase ${purchase.publicKey.toBase58()}`);
-  //     await program.methods.deletePurchase(true).accounts({
+  //     await program.methods.deletePurchase(true).accountsPartial({
   //       purchase: purchase.publicKey,
   //       product: purchase.account.product,
   //       refundee: authority,
@@ -79,7 +79,7 @@ module.exports = async function (provider) {
   // Init program
   /*await program.methods
     .initializeProgram(authority, stepFeeWallet)
-    .accounts({
+    .accountsPartial({
       payer: authority,
     })
     .rpc();*/
@@ -138,7 +138,7 @@ async function createTaxYear(
       1,
       ["txs", "txs" + year, "txs-10", "txs" + year + "-10"]
     )
-    .accounts({
+    .accountsPartial({
       payer: authority,
       authority: authority,
     })
@@ -146,7 +146,7 @@ async function createTaxYear(
 
   await program.methods
     .updateProductCost(new anchor.BN(7500000))
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier1Key,
     })
@@ -159,21 +159,21 @@ async function createTaxYear(
       new anchor.BN(0),
       new anchor.BN(0),
     ])
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier1Key,
     })
     .rpc();
   await program.methods
     .updateProductActiveState(true)
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier1Key,
     })
     .rpc();
   await program.methods
     .updateProductMint(usdcMint)
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier1Key,
     })
@@ -192,7 +192,7 @@ async function createTaxYear(
       1,
       ["txs", "txs" + year, "txs-20", "txs" + year + "-20"]
     )
-    .accounts({
+    .accountsPartial({
       payer: authority,
       authority: authority,
     })
@@ -200,7 +200,7 @@ async function createTaxYear(
 
   await program.methods
     .updateProductCost(new anchor.BN(20000000))
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier2Key,
     })
@@ -213,21 +213,21 @@ async function createTaxYear(
       new anchor.BN(0),
       new anchor.BN(0),
     ])
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier2Key,
     })
     .rpc();
   await program.methods
     .updateProductActiveState(true)
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier2Key,
     })
     .rpc();
   await program.methods
     .updateProductMint(usdcMint)
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier2Key,
     })
@@ -246,7 +246,7 @@ async function createTaxYear(
       1,
       ["txs", "txs" + year, "txs-30", "txs" + year + "-30"]
     )
-    .accounts({
+    .accountsPartial({
       payer: authority,
       authority: authority,
     })
@@ -254,7 +254,7 @@ async function createTaxYear(
 
   await program.methods
     .updateProductCost(new anchor.BN(50000000))
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier3Key,
     })
@@ -267,21 +267,21 @@ async function createTaxYear(
       new anchor.BN(0),
       new anchor.BN(0),
     ])
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier3Key,
     })
     .rpc();
   await program.methods
     .updateProductActiveState(true)
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier3Key,
     })
     .rpc();
   await program.methods
     .updateProductMint(usdcMint)
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier3Key,
     })
@@ -300,7 +300,7 @@ async function createTaxYear(
       1,
       ["txs", "txs" + year, "txs-40", "txs" + year + "-40"]
     )
-    .accounts({
+    .accountsPartial({
       payer: authority,
       authority: authority,
     })
@@ -308,7 +308,7 @@ async function createTaxYear(
 
   await program.methods
     .updateProductCost(new anchor.BN(250000000))
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier4Key,
     })
@@ -321,21 +321,21 @@ async function createTaxYear(
       new anchor.BN(0),
       new anchor.BN(0),
     ])
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier4Key,
     })
     .rpc();
   await program.methods
     .updateProductActiveState(true)
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier4Key,
     })
     .rpc();
   await program.methods
     .updateProductMint(usdcMint)
-    .accounts({
+    .accountsPartial({
       authority: authority,
       product: productTXTier4Key,
     })
